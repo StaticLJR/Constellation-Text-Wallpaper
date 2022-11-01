@@ -1,12 +1,14 @@
 "use strict";
 
 var winW = 0, winH = 0, vmax, vmin, winStable = true;
+var ctx, canvasEle;
 const picW = 5754, picH = 3840;
 const PI = 3.14159265358979;
 
 var cX2P = 0.5, cY2P = 0.4, cX, cY;
 var r2vmax = 1, r, omega = 2 * PI / 60000, theta = 0, timeBase = new Date() - 0;
 var starCnt = 1000, stars = [];
+//theta = omega * (t - timeBase), 过2PI不重置
 
 var pressStart, fadeFrom, fadeTo, fadeParam;
 var frameW2L = 0.1, frameDist2vmin = 0.005;
@@ -14,12 +16,12 @@ var frameW2L = 0.1, frameDist2vmin = 0.005;
 var flagX2W = 0.5, flagY2W = 0.3;
 var flagW2W = 0.8, flagH2W = 0.3;
 var flagW, flagH, flagX, flagY;
-var flags = [], flagNowAt = -1, flagNow;
+var flags = [], flagNowAt = -2, flagNow;
 
 var pickQueue = []
 
 /*
-	pickQueue = [[t1, frameIndex = [flagsI, lineI, frameI]],...]
+	pickQueue = [[t1, frame],...]
 */
 /*
 	flag 结构:
@@ -38,10 +40,11 @@ var pickQueue = []
 						{
 							ends: [x1, y1, x2, y2],	//端点坐标
 							dim: [l, w],	//长宽
-							starInterval : [		//记录所有可能进入每个节框的星
+							intOfStars : [		//记录所有可能进入每个节框的星
 								{
 									starIndex : i,	//星在星数组的索引
 									interval : [],	//入框区间集
+									nextIntEndI : i	//实时计算量，theta的右邻区间端点，无论左或右端点
 								},...
 							],
 							starPicked : i			//阶段2计算量
@@ -57,9 +60,11 @@ var pickQueue = []
 	star = {
 		r : r0,
 		theta : theta0, 	//初始坐标
-		color : 0xffffff,
+		color : [r, g, b],
 		size : r,
-		alpha : ,
+		alpha : a,	//0 - 1
+		evalX : 1	//
+		evalY : 1	//
 	}
 */
 
@@ -176,9 +181,11 @@ async function starInit() {
 		return {
 			r: Math.sqrt(Math.random()) * r2vmax * vmax,
 			theta: Math.random() * 2 * PI,
-			color: Math.floor(lerp(0xd0, 0xff, Math.random())) << 4
-				+ Math.floor(lerp(0xc0, 0xff, Math.random())) << 2
-				+ Math.floor(lerp(0xe0, 0xff, Math.random())),
+			color: [
+				Math.floor(lerp(0xd0, 0xff, Math.random())),
+				Math.floor(lerp(0xc0, 0xff, Math.random())),
+				Math.floor(lerp(0xe0, 0xff, Math.random()))
+			],
 			size: lerp(0.001, 0.005, Math.sqrt(Math.random())) * vmax,
 			alpha: lerp(0.8, 1.0, Math.random()),
 		}
@@ -240,7 +247,7 @@ async function frameInit() {
 					frame = {
 						ends: [0, 0, 0, 0],
 						dim: [line.dim[1], line.dim[1]],
-						starInterval: [],
+						intOfStars: [],
 						starPicked: -1
 					}
 					if (k == 0) {
@@ -277,6 +284,7 @@ async function starEncounterCalc() {
 	flags.forEach((flag, flagi) => {
 		flag.lines.forEach((line, linei) => {
 			line.frames.forEach((f, framei) => {
+				//算节框斜角phi， 以及将节框（和全图）旋转-phi
 				let phi = Math.acos((f.ends[2] - f.ends[0]) / f.dim[0]);
 				let box = [
 					(f.ends[0] - cX) * Math.cos(phi) + (f.ends[1] - cY) * Math.sin(phi),
@@ -289,6 +297,7 @@ async function starEncounterCalc() {
 					box[1] + f.dim[1] / 2,
 				]
 
+				//初筛筛掉半径不符合的星，上限取两x最大x和两y最大y的勾股长，下限一样取勾股长，但两x异号则最小x取0，两y一样
 				let priCut = [
 					Math.sqrt(
 						(Math.sign(box[0]) * Math.sign(box[2]) > 0 ?
@@ -306,6 +315,7 @@ async function starEncounterCalc() {
 				priCut_i[1] = priCut_i[0];
 				while (stars[priCut_i[1]].r <= priCut[1]) priCut_i[1]++;
 
+				//依据反正弦反余弦分别组装区间，然后加入镜面端点，修正-pi/2~0，然后x和y区间求交集
 				let starR, intX, intY;
 				for (let j = priCut_i[0]; j < priCut_i[1]; j++) {
 					starR = stars[priCut_i[j]].r;
@@ -313,21 +323,21 @@ async function starEncounterCalc() {
 						!(box[2] > starR && box[0] < starR) - 0,
 						Math.acos(box[2] / starR),
 						Math.acos(box[0] / starR)]
-						.filter(x => !isNaN);
+						.filter(x => !isNaN(x));
 					intX = intX.concat(intX.slice(1).reverse().map(x => 2 * PI - x));
 
 					intY = [
 						!(box[1] < -starR && box[3] > -starR) - 0,
 						Math.acos(box[1] / starR),
 						Math.acos(box[3] / starR)]
-						.filter(x => !isNaN);
+						.filter(x => !isNaN(x));
 					intY = intY.concat(intY.slice(1).reverse().map(x => PI - x));
 					p = intY.findIndex((x, i) => i > 0 && x > 0);
 					intY = intervalCalc(intX, intY.concat(
 						intY.splice(0, p, (p - intY[0]) % 2)
 							.slice(1).map((x, i) => x + 2 * PI)
 					));
-					if (intY != [1]) frame.starInterval.push({
+					if (intY != [1]) frame.intOfStars.push({
 						starIndex: priCut_i[j],
 						interval: intY.map((x, i) => x + (i ? phi : 0))
 					});
@@ -338,7 +348,7 @@ async function starEncounterCalc() {
 }
 
 /*
-starInterval : [		//记录所有可能进入每个节框的星
+intOfStars : [		//记录所有可能进入每个节框的星
 {
 	starIndex : i,	//星在星数组的索引
 	interval : [],	//入框区间集
@@ -348,19 +358,80 @@ starPicked : i			//阶段2计算量
 */
 
 function pickOneStar(frame) {
-	starInterval.map((star, i) =>
-		(star.interval.length - star.interval.reverse().findIndex(x => x < theta) - star.interval[0]) % 2 && i
-	).filter(x => x != 0);
+	if (!pickOn) { return [-1] }
+
+	/*
+	let star = (arr =>
+		arr.length == 0 ? { starIndex: -1 } :
+			intOfStars[arr[Math.floor(Math.random() * arr.length)]]
+	)(
+		intOfStars.map((star, i) =>
+			(star.interval.length - 1
+				- star.interval.reverse().findIndex(x => x < theta % (2 * PI))
+				- star.interval[0] + 1) % 2 && i
+		).filter(x => x != 0)
+	);
+	*/
+	let nextEndOfInts = frame.intOfStars.map((star, i) => [i,
+		(i => i == -1 ? star.interval[0] : i)(
+			star.interval.findIndex(x => x > theta % (2 * PI))
+		) - star.interval[0]
+	]);
+	let RHEnds = nextEndOfInts.filter(ele => ele[2] % 2 == 1);
+	if (!pickOn) { return [-1] }
+	if (RHEnds.length == 0) {
+		frame.starPicked = -1;
+		return [
+			Math.min(
+				nextEndOfInts.map(ele =>
+					(frame.intOfStars[ele[0]].interval[ele[1]]
+						- theta % (2 * PI) + 2 * PI) % (2 * PI)
+				)
+			) + theta,
+			frame,
+		];
+	} else {
+		let picked = Math.floor(Math.random() * RHEnds.length);
+		frame.starPicked = frame.intOfStars[RHEnds[picked][0]].starIndex;
+		return [
+			(frame.intOfStars[RHEnds[picked][0]].interval[RHEnds[picked][1]]
+				- theta % (2 * PI) + 2 * PI) % (2 * PI) + theta,
+			frame,
+		];
+	}
 }
 
-//frameIndexes : [[t1, [frameI, lineI, frameI]], ...]
-async function pickStar(frameIndexes, all = false) {
-	if ()
-		frameIndexes.forEach(index => {
-			if (flags[index[0]] == )
-	});
-}
+//tasks : [[t1, frame], ...]
+async function pickStar(pickCnt) {
+	let nextTask;
+	let subQueue = [];
+	if (pickAll) {
+		pickQueue = [];
+		for (line of flagNow.lines) {
+			for (frame of line.frames) {
+				nextTask = pickOneStar(frame);
+				if (nextTask.length == 1) { break; }
+				subQueue.push(nextTask);
+			}
+			if (nextTask.length == 1) { break; }
+		}
 
+	} else {
+		for (task of pickQueue.splice(0, pickCnt)) {
+			nextTask = pickOneStar(task[1]);
+			if (nextTask.length == 1) { break; }
+			subQueue.push(nextTask);
+		}
+	}
+	if (pickOn) {
+		pickQueue = pickQueue.concat(subQueue.sort((a, b) => a[0] - b[0]));
+		pickAll = false;
+	} else {
+		pickQueue = [];
+		pickAll = true;
+		termPick = true;
+	}
+}
 
 //Runtime
 /*
@@ -368,26 +439,67 @@ async function pickStar(frameIndexes, all = false) {
 0: 无
 1: svg读取完成
 （窗口变化重置点）
-2: 星计算完成
-3: 星座节框计算完成
+2: 星 半定位
+3: 节框定位与相交计算
 重选星的时候不重置，不干扰绘制运行
 */
 var availability = 0;
 var loadOn = false;
 var termLoad = true;
 var pickOn = false;
+var pickAll = true;
 var termPick = true;
-
+/*
+	star 结构:
+	star = {
+		r : r0,
+		theta : theta0, 	//初始坐标
+		color : [r, g, b],
+		size : r,
+		alpha : a,	//0 - 1
+		evalX : 1	//
+		evalY : 1	//
+	}
+*/
 async function draw() {
-	switch (availability) {
-		case 0:
-
-		case 1:
-
-		case 2:
-
+	canvasEle = window.document.getElementById("canvas");
+	if (canvasEle.getContext) {
+		ctx = canvasEle.getContext("2d");
+	}
+	else {
+		console.log("ctx not found");
+		return 0;
+	}
+	if (availability >= 2) {
+		stars.forEach((star, i) => {
+			star.evalX = cX + star.r * Math.cos(theta + star.theta);
+			star.evalY = cY + star.r * Math.sin(theta + star.theta);
+			ctx.fillStyle = `rgba(${star.color[0]}, ${star.color[0]}, ${star.color[0]}, ${star.alpha})`;
+			ctx.beginPath();
+			ctx.moveTo(star.evalX, star.evalY);
+			ctx.arc(star.evalX, star.evalY, star.size, 0, 2 * Math.PI);
+			ctx.fill();
+		});
+		if (availability >= 3) {
+			ctx.lineWidth = 3;
+			flagNow.lines.forEach((line, lienI) => {
+				ctx.beginPath();
+				line.frames.filter(f => f.starPicked != -1)
+					.forEach((frame, frameI) => {
+						let star = stars[frame.starPicked];
+						if (frameI == 0) {
+							ctx.moveTo(star.evalX, star.evalY);
+						} else {
+							ctx.lineTo(star.evalX, star.evalY);
+						}
+					});
+				ctx.stroke();
+			});
+		}
 	}
 }
+
+
 
 async function loadThread() {
 	if (loadOn) {
@@ -395,13 +507,21 @@ async function loadThread() {
 			case 0:
 				await svgLoad();
 				if (!loadOn) { termLoad = true; return; }
-				updateWinDims();
-				await starInit();
+				if (flagNowAt == -1) { termLoad = true; return; }
 				availability = 1;
 			case 1:
-				await
-		case 2:
-
+				await starInit();
+				if (!loadOn) { termLoad = true; return; }
+				await updateCoord();
+				if (!loadOn) { termLoad = true; return; }
+				await frameInit();
+				if (!loadOn) { termLoad = true; return; }
+				availability = 2;
+			case 2:
+				await starEncounterCalc();
+				if (!loadOn) { termLoad = true; return; }
+				availability = 3;
+				break;
 		}
 	}
 	termLoad = true;
@@ -430,18 +550,12 @@ function anim() {
 	window.requestAnimationFrame(anim);
 }
 
-// async function anim() {
-// 	//draw();
-// 	await longTask();
-//     console.log(1);
-// 	window.requestAnimationFrame(anim);
-// }
+anim();
 
-// function longTask(){
-// 	return new Promise((res, rej) => {
-// 		setTimeout(()=>{console.log(2);res(2)}, 2000);
-// 	})
-// }
+async function test() {
+	await svgLoad();
+}
 
-// anim();
-//In this case, anim will be delayed.
+async function animTest() {
+
+}
