@@ -3,11 +3,12 @@
 var winW = 0, winH = 0, vmax, vmin, winStable = true;
 var ctx, canvasEle;
 const picW = 5754, picH = 3840;
+var picScale;
 const PI = 3.14159265358979;
 
 var cX2P = 0.5, cY2P = 0.4, cX, cY;
-var r2vmax = 1, r, omega = 2 * PI / 60000, theta = 0, timeBase = new Date() - 0;
-var starCnt = 1000, stars = [];
+var r2vmax = 0.6, r, omega = 2 * PI / 400000, theta = 0, timeBase = new Date() - 0;
+var starCnt = 10000, stars = [];
 //theta = omega * (t - timeBase), 过2PI不重置
 
 var pressStart, fadeFrom, fadeTo, fadeParam;
@@ -107,7 +108,7 @@ function intervalCalc(x, y, logic = (x0, y0) => x0 && y0 && true) {
 			src[2].push(src[j][p[j]]);
 			p[2]++;
 		}
-		console.log(JSON.stringify(src), JSON.stringify(p), JSON.stringify(end), c, j)
+		//console.log(JSON.stringify(src), JSON.stringify(p), JSON.stringify(end), c, j)
 	}
 	return src[2];
 }
@@ -151,7 +152,8 @@ async function svgLoad() {
 					rawDOM: svgDOM,
 					lines: []
 				};
-				flags.append(flag);
+				flags.push(flag);
+				cnt++;
 			})
 			.catch(rej => { cnt = 0; });
 	}
@@ -177,7 +179,7 @@ function updateWinDims() {
 }
 
 async function starInit() {
-	stars = Array(starCnt).map((x, i) => {
+	stars = Array(starCnt).fill(0).map((x, i) => {
 		return {
 			r: Math.sqrt(Math.random()) * r2vmax * vmax,
 			theta: Math.random() * 2 * PI,
@@ -186,7 +188,7 @@ async function starInit() {
 				Math.floor(lerp(0xc0, 0xff, Math.random())),
 				Math.floor(lerp(0xe0, 0xff, Math.random()))
 			],
-			size: lerp(0.001, 0.005, Math.sqrt(Math.random())) * vmax,
+			size: lerp(0.0004, 0.0007, Math.sqrt(Math.random())) * vmax,
 			alpha: lerp(0.8, 1.0, Math.random()),
 		}
 	}).sort((l, r) => l.r - r.r);
@@ -194,13 +196,15 @@ async function starInit() {
 
 function updateCoord() {
 	let picX = 0, picY = 0;
-	if (winW / winH > 5754 / 3840) {
-		picY = -(winW / 5754 * 3840 - winH) / 2;
+	if (winW / winH > picW / picH) {
+		picScale = winW / picW;
+		picY = -(picScale * picH - winH) / 2;
 	} else {
-		picX = -(winH * 5754 / 3840 - winW) / 2;
+		picScale = winH / picH;
+		picX = -(picScale * picW - winW) / 2;
 	}
-	cX = picW * cX2P + picX;
-	cY = picH * cY2P + picY;
+	cX = picW * picScale * cX2P + picX;
+	cY = picH * picScale * cY2P + picY;
 
 	if (flagNowAt == -1) return;
 	flags.forEach((x, i) => {
@@ -237,12 +241,14 @@ async function frameInit() {
 				line.ends[2] = tmp;
 			}
 			line.dim[0] =
-				Math.sqrt((line.ends[2] - line.ends[0]) ** 2 - (line.ends[3] - line.ends[1]) ** 2);
+				Math.sqrt((line.ends[2] - line.ends[0]) ** 2 + (line.ends[3] - line.ends[1]) ** 2);
 			line.dim[1] = frameW2L * line.dim[0];
 
-			line.frames = Array(Math.min(Math.floor(
-				(line.dim[0] - line.dim[1]) / (frameDist2vmin * vmin)
-			), 1) + 2)
+			line.frames = Array(
+				Math.min(Math.floor(
+					(line.dim[0] - line.dim[1]) / (frameDist2vmin * vmin)
+				), 1) + 2
+			).fill(0)
 				.map((frame, k, frames) => {
 					frame = {
 						ends: [0, 0, 0, 0],
@@ -273,9 +279,10 @@ async function frameInit() {
 					frame.ends[1] = lerp(line.ends[1], line.ends[3], frame.ends[1]);
 					frame.ends[2] = lerp(line.ends[0], line.ends[2], frame.ends[3]);
 					frame.ends[3] = lerp(line.ends[1], line.ends[3], frame.ends[3]);
+					return frame;
 				});
 
-			flag.lines.append(line);
+			flag.lines.push(line);
 		});
 	});
 }
@@ -316,9 +323,9 @@ async function starEncounterCalc() {
 				while (stars[priCut_i[1]].r <= priCut[1]) priCut_i[1]++;
 
 				//依据反正弦反余弦分别组装区间，然后加入镜面端点，修正-pi/2~0，然后x和y区间求交集
-				let starR, intX, intY;
+				let starR, intX, intY, p;
 				for (let j = priCut_i[0]; j < priCut_i[1]; j++) {
-					starR = stars[priCut_i[j]].r;
+					starR = stars[j].r;
 					intX = [
 						!(box[2] > starR && box[0] < starR) - 0,
 						Math.acos(box[2] / starR),
@@ -337,10 +344,10 @@ async function starEncounterCalc() {
 						intY.splice(0, p, (p - intY[0]) % 2)
 							.slice(1).map((x, i) => x + 2 * PI)
 					));
-					if (intY != [1]) frame.intOfStars.push({
-						starIndex: priCut_i[j],
+					if (intY != [1]) {f.intOfStars.push({
+						starIndex: j,
 						interval: intY.map((x, i) => x + (i ? phi : 0))
-					});
+					}); console.log(linei, framei)}
 				}
 			})
 		})
@@ -407,8 +414,8 @@ async function pickStar(pickCnt) {
 	let subQueue = [];
 	if (pickAll) {
 		pickQueue = [];
-		for (line of flagNow.lines) {
-			for (frame of line.frames) {
+		for (let line of flagNow.lines) {
+			for (let frame of line.frames) {
 				nextTask = pickOneStar(frame);
 				if (nextTask.length == 1) { break; }
 				subQueue.push(nextTask);
@@ -417,7 +424,7 @@ async function pickStar(pickCnt) {
 		}
 
 	} else {
-		for (task of pickQueue.splice(0, pickCnt)) {
+		for (let task of pickQueue.splice(0, pickCnt)) {
 			nextTask = pickOneStar(task[1]);
 			if (nextTask.length == 1) { break; }
 			subQueue.push(nextTask);
@@ -431,6 +438,7 @@ async function pickStar(pickCnt) {
 		pickAll = true;
 		termPick = true;
 	}
+	console.log("picked")
 }
 
 //Runtime
@@ -470,6 +478,7 @@ async function draw() {
 		console.log("ctx not found");
 		return 0;
 	}
+	ctx.clearRect(0, 0, winW, winH);
 	if (availability >= 2) {
 		stars.forEach((star, i) => {
 			star.evalX = cX + star.r * Math.cos(theta + star.theta);
@@ -529,8 +538,11 @@ async function loadThread() {
 }
 
 function anim() {
+	theta = (new Date() - timeBase) * omega;
 	if (!updateWinDims()) {
-		availability = 1;
+		document.getElementById("canvas").setAttribute("width", winW);
+		document.getElementById("canvas").setAttribute("height", winH);
+		availability = Math.min(availability, 1);
 		loadOn = pickOn = false;
 	}
 	if (!loadOn && termLoad && !pickOn && termPick) {
