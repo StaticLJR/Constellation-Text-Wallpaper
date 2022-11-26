@@ -1,5 +1,8 @@
 {
 	"cSpell.words": [
 		"lerp"
-	]
+	],
+	"editor.fontSize": 12,
+	"editor.fontFamily": "Consolas, Monaco, 'Courier New', 'Droid Sans Mono', 'monospace', monospace",
+	"files.autoSave": "onFocusChange"
 }
